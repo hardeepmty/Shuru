@@ -1,146 +1,136 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
-const cookieParser = require('cookie-parser');
-require('dotenv').config();
+const axios = require('axios');
 
 const app = express();
+const port = 3000;
 
 app.use(bodyParser.json());
-app.use(cookieParser());
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-    .then(() => console.log('MongoDB connected'))
-    .catch(err => console.log(err));
-
-// User Schema and Model
-const UserSchema = new mongoose.Schema({
-    username: { type: String, required: true, unique: true },
-    password: { type: String, required: true }
-});
-
-UserSchema.pre('save', async function (next) {
-    if (!this.isModified('password')) {
-        return next();
-    }
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-});
-
-UserSchema.methods.comparePassword = function (candidatePassword) {
-    return bcrypt.compare(candidatePassword, this.password);
-};
-
-const User = mongoose.model('User', UserSchema);
-
-// Custom Model Schema and Model
-const CustomModelSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    description: { type: String, required: true },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
-});
-
-const CustomModel = mongoose.model('CustomModel', CustomModelSchema);
-
-// Middleware for authentication
-const auth = async (req, res, next) => {
-    const token = req.cookies.token;
-    if (!token) {
-        return res.status(401).send('Access Denied');
-    }
-    try {
-        const verified = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = await User.findById(verified.id);
-        next();
-    } catch (err) {
-        res.status(400).send('Invalid Token');
+const predefinedModels = {
+    "coder": {
+        name: "Coder",
+        description: "I am good at writing code"
+    },
+    "artist": {
+        name: "Artist",
+        description: "I am good at creating art and design."
+    },
+    "doctor": {
+        name: "Doctor",
+        description: "I am good at providing medical advice and diagnosis."
+    },
+    "scientist": {
+        name: "Scientist",
+        description: "I am good at scientific research and analysis."
+    },
+    "sportsman": {
+        name: "Sportsman",
+        description: "I am good at sports and physical fitness."
+    },
+    "product_manager": {
+        name: "Product Manager",
+        description: "I am good at designing products and software."
     }
 };
 
-// Auth Routes
-app.post('/auth/signup', async (req, res) => {
+let customModels = [];
+
+// Route to get all predefined models
+app.get('/api/predefined-models', (req, res) => {
+    res.json(Object.values(predefinedModels));
+});
+
+// Route to create a custom model
+app.post('/api/custom-model', async (req, res) => {
+    const { name, description } = req.body;
+    const newModel = { name, description };
+
     try {
-        const { username, password } = req.body;
-        const newUser = new User({ username, password });
-        await newUser.save();
-        res.status(201).send('User created');
-    } catch (err) {
-        res.status(400).send(err.message);
+        // Make a request to the Flask server to create the custom model
+        await axios.post('http://localhost:5000/custom-model', newModel);
+        customModels.push(newModel);
+        res.json(newModel);
+    } catch (error) {
+        console.error("Error creating custom model:", error);
+        res.status(500).json({ error: "Failed to create custom model" });
     }
 });
 
-app.post('/auth/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        const user = await User.findOne({ username });
-        if (!user || !(await user.comparePassword(password))) {
-            return res.status(400).send('Invalid credentials');
+// Route to initiate a single chat with a model
+app.post('/api/chat/:model', async (req, res) => {
+    const { model } = req.params;
+    const { message } = req.body;
+
+    // Check if the model is predefined
+    if (predefinedModels[model]) {
+        try {
+            const response = await simulateChat(predefinedModels[model], message);
+            res.json({ response });
+        } catch (error) {
+            res.status(500).json({ error: "Failed to get response from the model" });
         }
-        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.cookie('token', token, { httpOnly: true });
-        res.send('Logged in');
-    } catch (err) {
-        res.status(400).send(err.message);
-    }
-});
-
-app.post('/auth/logout', (req, res) => {
-    res.clearCookie('token');
-    res.send('Logged out');
-});
-
-// Custom Model Routes
-app.post('/customModel/create', auth, async (req, res) => {
-    try {
-        const { name, description } = req.body;
-        const newModel = new CustomModel({ name, description, userId: req.user._id });
-        await newModel.save();
-        res.status(201).send('Custom model created');
-    } catch (err) {
-        res.status(400).send(err.message);
-    }
-});
-
-app.get('/customModel', auth, async (req, res) => {
-    try {
-        const models = await CustomModel.find({ userId: req.user._id });
-        res.json(models);
-    } catch (err) {
-        res.status(400).send(err.message);
-    }
-});
-
-app.get('/customModel/:id', auth, async (req, res) => {
-    try {
-        const model = await CustomModel.findById(req.params.id);
-        if (!model || model.userId.toString() !== req.user._id.toString()) {
-            return res.status(404).send('Model not found');
+    } else {
+        // Check if the model is custom
+        const customModel = customModels.find(m => m.name === model);
+        if (customModel) {
+            try {
+                const response = await simulateChat(customModel, message);
+                res.json({ response });
+            } catch (error) {
+                res.status(500).json({ error: "Failed to get response from the model" });
+            }
+        } else {
+            res.status(404).json({ error: "Model not found" });
         }
-        res.json(model);
-    } catch (err) {
-        res.status(400).send(err.message);
     }
 });
 
-app.delete('/customModel/:id', auth, async (req, res) => {
-    try {
-        const model = await CustomModel.findById(req.params.id);
-        if (!model || model.userId.toString() !== req.user._id.toString()) {
-            return res.status(404).send('Model not found');
+// Route to initiate a group chat with multiple models
+app.post('/api/group-chat', async (req, res) => {
+    const { modelNames, message } = req.body;
+    const selectedModels = [];
+
+    // Check predefined models
+    modelNames.forEach(name => {
+        if (predefinedModels[name]) {
+            selectedModels.push(predefinedModels[name]);
         }
-        await model.remove();
-        res.send('Model deleted');
-    } catch (err) {
-        res.status(400).send(err.message);
+    });
+
+    // Check custom models
+    modelNames.forEach(name => {
+        const customModel = customModels.find(m => m.name === name);
+        if (customModel) {
+            selectedModels.push(customModel);
+        }
+    });
+
+    if (selectedModels.length === 0) {
+        res.status(404).json({ error: "No valid models found" });
+    } else {
+        try {
+            const responses = await Promise.all(
+                selectedModels.map(model => simulateChat(model, message))
+            );
+            res.json({ responses });
+        } catch (error) {
+            res.status(500).json({ error: "Failed to get responses from the models" });
+        }
     }
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+// Function to simulate chat interaction by calling the Flask server
+const simulateChat = async (model, message) => {
+    try {
+        const response = await axios.post(`http://localhost:5000/chat/${model.name.toLowerCase()}`, { message });
+        return response.data.response;
+    } catch (error) {
+        console.error(`Error interacting with model ${model.name}:`, error);
+        throw error;
+    }
+};
+
+app.listen(port, () => {
+    console.log(`Server running on http://localhost:${port}`);
 });
