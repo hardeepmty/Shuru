@@ -118,6 +118,12 @@ agents = {
 
 custom_models = []
 
+@app.route("/models", methods=["GET"])
+def get_all_models():
+    model_names = [agent.name for agent in agents.values()]
+    custom_model_names = [model.name for model in custom_models]
+    return jsonify({"predefined_models": model_names, "custom_models": custom_model_names})
+
 @app.route("/create_model", methods=["POST"])
 def api_create_model():
     data = request.json
